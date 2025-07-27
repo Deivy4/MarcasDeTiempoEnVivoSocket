@@ -1,57 +1,58 @@
-import express from "express";
-import cors from "cors";
 import { WebSocketServer } from "ws";
-import http from "http";
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+// Listas de clientes
+const adminClients = new Set();
+const regularClients = new Set();
 
-// Middlewares
-app.use(cors());
-app.use(express.json());
-
-// Crear servidor HTTP para compartir con WebSocket
-const server = http.createServer(app);
-
-// WebSocket
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ port: 8080 });
 
 wss.on("connection", (ws) => {
-  console.log("Cliente WebSocket conectado");
+  console.log("Cliente conectado, esperando identificación...");
 
-  ws.on("message", (message) => {
-    console.log("Mensaje recibido:", message.toString());
+  ws.on("message", (msg) => {
+    try {
+      const data = JSON.parse(msg);
+
+      // Mensaje inicial de identificación
+      if (data.type === "identify") {
+        if (data.role === "admin") {
+          adminClients.add(ws);
+          ws.role = "admin";
+          console.log("Conectado como ADMIN");
+        } else {
+          regularClients.add(ws);
+          ws.role = "client";
+          console.log("Conectado como CLIENTE");
+        }
+        return;
+      }
+
+      // Lógica según tipo de mensaje
+      if (data.type === "setTime" && ws.role === "admin") {
+        // Solo el admin puede enviar este mensaje
+        broadcastToClients({
+          type: "setTime",
+          newTime: data.newTime,
+        });
+      }
+    } catch (err) {
+      console.error("Error al parsear mensaje:", err);
+    }
   });
 
   ws.on("close", () => {
+    if (ws.role === "admin") adminClients.delete(ws);
+    else if (ws.role === "client") regularClients.delete(ws);
     console.log("Cliente desconectado");
   });
 });
 
-// Endpoint HTTP para recibir tiempos desde extensión o cliente
-app.post("/setTime", (req, res) => {
-  const { newTime, videoId } = req.body;
-
-  if (typeof newTime === "number" && videoId) {
-    const payload = JSON.stringify({ type: "setTime", newTime, videoId });
-
-    wss.clients.forEach((client) => {
-      if (client.readyState === 1) {
-        client.send(payload);
-      }
-    });
-
-    res.status(200).json({ message: "Mensaje enviado a clientes WebSocket" });
-  } else {
-    res
-      .status(400)
-      .json({
-        error: "Datos inválidos. Se requiere 'newTime' (number) y 'videoId'",
-      });
+// Función para enviar mensaje a todos los clientes normales
+function broadcastToClients(messageObj) {
+  const message = JSON.stringify(messageObj);
+  for (const client of regularClients) {
+    if (client.readyState === 1) {
+      client.send(message);
+    }
   }
-});
-
-// Iniciar el servidor
-server.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
-});
+}
